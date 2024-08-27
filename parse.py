@@ -72,9 +72,16 @@ class Task(dj.DataClassJsonMixin):
     description: t.List[str] = dc.field(default_factory=lambda: [])
 
     def ser(self) -> t.Iterable[str]:
+        used_words_in_title = set(SPACE_RE.split(self.title))
+        prefix_tags = []
+        for tag in self.tags:
+            if tag in used_words_in_title:
+                break
+            prefix_tags.append(tag)
         words = [self.state]
         if self.identifier is not None:
             words.append(self.identifier)
+        words.extend(prefix_tags)
         words.append(self.title)
         yield self.prefix + " ".join(words)
         yield from self.description
@@ -219,7 +226,8 @@ def parse_task_line(section: Section, line: str) -> None | Task:
                 words.append(word)
         elif TAG_RE.fullmatch(word) is not None:
             tags.append(word)
-            words.append(word)
+            if not skipping:
+                words.append(word)
         else:
             skipping = False
             words.append(word)
