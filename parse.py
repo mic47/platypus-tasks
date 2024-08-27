@@ -72,12 +72,9 @@ class Task(dj.DataClassJsonMixin):
     description: t.List[str] = dc.field(default_factory=lambda: [])
 
     def ser(self) -> t.Iterable[str]:
-        used_words = set(SPACE_RE.split(self.title))
-        prefix_tags = [tag for tag in self.tags if tag not in used_words]
         words = [self.state]
         if self.identifier is not None:
             words.append(self.identifier)
-        words.extend(prefix_tags)
         words.append(self.title)
         yield self.prefix + " ".join(words)
         yield from self.description
@@ -221,8 +218,7 @@ def parse_task_line(section: Section, line: str) -> None | Task:
                 words.append(word)
         elif TAG_RE.fullmatch(word) is not None:
             tags.append(word)
-            if not skipping:
-                words.append(word)
+            words.append(word)
         else:
             skipping = False
             words.append(word)
@@ -260,10 +256,14 @@ def parse(lines: mit.peekable, file_identifiers: FileIdentifiers) -> None | Todo
         for raw_task in raw_tasks:
             task = parse_task_line(section, raw_task)
             if task is None:
+                stripped_line = raw_task.rstrip("\n")
                 if last_task is not None:
-                    last_task.description.append(raw_task.rstrip("\n"))
+                    last_task.description.append(stripped_line)
+                    for word in SPACE_RE.split(stripped_line):
+                        if TAG_RE.fullmatch(word) is not None and word not in last_task.tags:
+                            last_task.tags.append(word)
                 else:
-                    section.description.append(raw_task.rstrip("\n"))
+                    section.description.append(stripped_line)
                 continue
             last_task = task
             lines_order.append(task)
