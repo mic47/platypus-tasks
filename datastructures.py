@@ -104,7 +104,9 @@ class TodoFile(dj.DataClassJsonMixin):
     unmatched_lines: t.List[str]
     prefix: t.List[str]
     header_suffix: t.List[str] = dc.field(default_factory=lambda: [])
-    lines_order: t.List[Section | Task] = dc.field(default_factory=lambda: [])
+    lines_order: t.List[Section | Task] = dc.field(
+        default_factory=lambda: [], metadata=dj.config(encoder=lambda _: [])
+    )
 
     def ser(self) -> t.Iterable[str]:
         yield from self.prefix
