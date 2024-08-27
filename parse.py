@@ -5,7 +5,6 @@ import getpass
 import os
 import platform
 import re
-import sys
 import typing as t
 
 import dataclasses_json as dj
@@ -49,14 +48,16 @@ class Section(dj.DataClassJsonMixin):
     identifier: str | None
     title: str
     level: int
+    description: t.List[str] = dc.field(default_factory=lambda: [])
 
-    def ser(self) -> t.List[str]:
+    def ser(self) -> t.Iterable[str]:
         level = "#" * self.level
         words = [level]
         if self.identifier is not None:
             words.append(self.identifier)
         words.append(self.title)
-        return [" ".join(words)]
+        yield " ".join(words)
+        yield from self.description
 
 
 @dc.dataclass
@@ -68,8 +69,9 @@ class Task(dj.DataClassJsonMixin):
     title: str = dc.field(metadata=dj.config(field_name="content"))
     section: str
     prefix: str = dc.field(default="")  # Originally was missing
+    description: t.List[str] = dc.field(default_factory=lambda: [])
 
-    def ser(self) -> t.List[str]:
+    def ser(self) -> t.Iterable[str]:
         used_words = set(SPACE_RE.split(self.title))
         prefix_tags = [tag for tag in self.tags if tag not in used_words]
         words = [self.state]
@@ -77,7 +79,8 @@ class Task(dj.DataClassJsonMixin):
             words.append(self.identifier)
         words.extend(prefix_tags)
         words.append(self.title)
-        return [self.prefix + " ".join(words)]
+        yield self.prefix + " ".join(words)
+        yield from self.description
 
 
 @dc.dataclass
@@ -99,7 +102,7 @@ class TodoFile(dj.DataClassJsonMixin):
     unmatched_lines: t.List[str]
     prefix: t.List[str]
     header_suffix: t.List[str] = dc.field(default_factory=lambda: [])
-    lines_order: t.List[str | Section | Task] = dc.field(default_factory=lambda: [])
+    lines_order: t.List[Section | Task] = dc.field(default_factory=lambda: [])
 
     def ser(self) -> t.Iterable[str]:
         yield from self.prefix
@@ -248,8 +251,7 @@ def parse(lines: mit.peekable, file_identifiers: FileIdentifiers) -> None | Todo
     tasks = {}
     non_id_tasks = []
     sections = []
-    unmatched_lines = []
-    lines_order: t.List[str | Section | Task] = []
+    lines_order: t.List[Section | Task] = []
     while (section := parse_section_line(lines)) is not None:
         sections.append(section)
         lines_order.append(section)
@@ -258,10 +260,12 @@ def parse(lines: mit.peekable, file_identifiers: FileIdentifiers) -> None | Todo
         for raw_task in raw_tasks:
             task = parse_task_line(section, raw_task)
             if task is None:
-                print("Unable to match", raw_task, file=sys.stderr)
-                unmatched_lines.append(raw_task)
-                lines_order.append(raw_task.rstrip("\n"))
+                if last_task is not None:
+                    last_task.description.append(raw_task.rstrip("\n"))
+                else:
+                    section.description.append(raw_task.rstrip("\n"))
                 continue
+            last_task = task
             lines_order.append(task)
             if task.identifier is None:
                 non_id_tasks.append(task)
@@ -276,7 +280,7 @@ def parse(lines: mit.peekable, file_identifiers: FileIdentifiers) -> None | Todo
         sections,
         tasks,
         non_id_tasks,
-        unmatched_lines,
+        [],  # Unmatched lines
         header_prefix,
         header_suffix,
         lines_order,
