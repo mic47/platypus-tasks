@@ -130,12 +130,13 @@ class TodoFile(dj.DataClassJsonMixin):
         self.non_id_tasks = []
         return updated
 
+SECTION_LINE_RE= re.compile("##*[ \t]")
 
 def til_sectionlines(lines: mit.peekable) -> t.List[str]:
     out: t.List[str] = []
     while (x_ := lines.peek(None)) is not None:
         x: str = x_.rstrip()
-        if x.startswith("#"):
+        if SECTION_LINE_RE.match(x) is not None:
             return out
         out.append(next(lines))
     return out
