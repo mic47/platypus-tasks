@@ -237,7 +237,7 @@ class DiffFile(dj.DataClassJsonMixin):
                     if old_section is not None
                     else task.old_section
                 )
-                yield f"{Fore.yellow}Following task switched section from {old_section_str}{Style.reset}"
+                yield f"{Fore.yellow}Following task was moved from section '{old_section_str}'{Style.reset}"
             yield task.str_diff
 
 
