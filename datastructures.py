@@ -9,6 +9,7 @@ import typing as t
 
 import dataclasses_json as dj
 import more_itertools as mit
+from colored import Fore, Style
 
 import alignment as aln
 
@@ -143,7 +144,7 @@ class TodoFile(dj.DataClassJsonMixin):
 
     def diff(self, other: TodoFile) -> DiffFile:
         # Basically -- find tasks that changed
-        tasks = {}
+        tasks: t.Dict[str, DiffTask] = {}
         used_tasks = set()
         for task in self.tasks.values():
             if task.identifier is None:
@@ -153,14 +154,20 @@ class TodoFile(dj.DataClassJsonMixin):
             task_str = "\n".join(task.ser())
             o = other.tasks.get(task.identifier)
             if o is None:
-                tasks[task.identifier] = "\n".join(
-                    aln.pretty_alignment(aln.align_texts("", task_str))
+                tasks[task.identifier] = DiffTask(
+                    "\n".join(aln.pretty_alignment(aln.align_texts("", task_str))),
+                    old_section=None,
+                    new_section=task.section,
                 )
             else:
                 o_str = "\n".join(o.ser())
                 if task_str != o_str:
-                    tasks[task.identifier] = "\n".join(
-                        aln.pretty_alignment(aln.align_texts(o_str, task_str))
+                    tasks[task.identifier] = DiffTask(
+                        "\n".join(
+                            aln.pretty_alignment(aln.align_texts(o_str, task_str))
+                        ),
+                        old_section=o.section,
+                        new_section=task.section,
                     )
 
         for task in other.tasks.values():
@@ -169,21 +176,60 @@ class TodoFile(dj.DataClassJsonMixin):
             if task.identifier in used_tasks:
                 continue
             task_str = "\n".join(task.ser())
-            tasks[task.identifier] = "\n".join(
-                aln.pretty_alignment(aln.align_texts(task_str, ""))
+            tasks[task.identifier] = DiffTask(
+                "\n".join(aln.pretty_alignment(aln.align_texts(task_str, ""))),
+                old_section=task.section,
+                new_section=None,
             )
         # TODO: Do something / order with the sections
 
         result = DiffFile(
-            tasks=tasks)
+            tasks=tasks, sections=self.sections, old_sections=other.sections
+        )
         return result
+
+
+@dc.dataclass
+class DiffTask:
+    str_diff: str
+    old_section: str | None
+    new_section: str | None
+
 
 @dc.dataclass
 class DiffFile(dj.DataClassJsonMixin):
-    tasks: t.Dict[str, str]
+    tasks: t.Dict[str, DiffTask]
+    sections: t.List[Section]
+    old_sections: t.List[Section]
+
     def ser(self) -> t.Iterable[str]:
-        for line in self.tasks.values():
-            yield line
+        section_order = {
+            section.identifier: index for index, section in enumerate(self.sections)
+        }
+        unprinted_sections = {section.identifier: section for section in self.sections}
+        old_sections = {section.identifier: section for section in self.old_sections}
+        for task in sorted(
+            self.tasks.values(),
+            key=lambda x: section_order.get(x.new_section or x.old_section) or -1,
+        ):
+            section = unprinted_sections.get(task.new_section or task.old_section)
+            if section is not None:
+                yield from section.ser()
+                del unprinted_sections[section.identifier]
+            if (
+                task.new_section is not None
+                and task.old_section is not None
+                and task.new_section != task.old_section
+            ):
+                old_section = old_sections.get(task.old_section)
+                old_section_str = (
+                    "\n".join(old_section.ser())
+                    if old_section is not None
+                    else task.old_section
+                )
+                yield f"{Fore.yellow}Following task switched section from {old_section_str}{Style.reset}"
+            yield task.str_diff
+
 
 SECTION_LINE_RE = re.compile("##*[ \t]")
 
