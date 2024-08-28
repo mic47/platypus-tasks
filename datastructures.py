@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import datetime as dt
+import math
 import re
 import typing as t
 
@@ -213,9 +214,18 @@ class DiffFile(dj.DataClassJsonMixin):
             key=lambda x: section_order.get(x.new_section or x.old_section) or -1,
         ):
             section = unprinted_sections.get(task.new_section or task.old_section)
-            if section is not None:
-                yield from section.ser()
+            level = math.inf
+            sections: t.List[Section] = []
+            while section is not None and section.level < level:
+                sections.append(section)
                 del unprinted_sections[section.identifier]
+                level = section.level
+                index = section_order.get(section.identifier)
+                if index is None or index <= 0:
+                    break
+                section = self.sections[index - 1]
+            for section in reversed(sections):
+                yield from (f"{Style.bold}{x}{Style.reset}" for x in section.ser())
             if (
                 task.new_section is not None
                 and task.old_section is not None
