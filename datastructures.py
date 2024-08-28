@@ -1,5 +1,7 @@
 """Parsing and data structure module for tasks"""
 
+from __future__ import annotations
+
 import dataclasses as dc
 import datetime as dt
 import re
@@ -7,6 +9,8 @@ import typing as t
 
 import dataclasses_json as dj
 import more_itertools as mit
+
+import alignment as aln
 
 COUNTER_RE = re.compile("[0-9][0-9]*")
 UUID_RE = re.compile("[a-zA-Z0-9][-a-zA-Z0-9]*")
@@ -137,6 +141,49 @@ class TodoFile(dj.DataClassJsonMixin):
         self.non_id_tasks = []
         return updated
 
+    def diff(self, other: TodoFile) -> DiffFile:
+        # Basically -- find tasks that changed
+        tasks = {}
+        used_tasks = set()
+        for task in self.tasks.values():
+            if task.identifier is None:
+                # TODO
+                continue
+            used_tasks.add(task.identifier)
+            task_str = "\n".join(task.ser())
+            o = other.tasks.get(task.identifier)
+            if o is None:
+                tasks[task.identifier] = "\n".join(
+                    aln.pretty_alignment(aln.align_texts("", task_str))
+                )
+            else:
+                o_str = "\n".join(o.ser())
+                if task_str != o_str:
+                    tasks[task.identifier] = "\n".join(
+                        aln.pretty_alignment(aln.align_texts(o_str, task_str))
+                    )
+
+        for task in other.tasks.values():
+            if task.identifier is None:
+                continue
+            if task.identifier in used_tasks:
+                continue
+            task_str = "\n".join(task.ser())
+            tasks[task.identifier] = "\n".join(
+                aln.pretty_alignment(aln.align_texts(task_str, ""))
+            )
+        # TODO: Do something / order with the sections
+
+        result = DiffFile(
+            tasks=tasks)
+        return result
+
+@dc.dataclass
+class DiffFile(dj.DataClassJsonMixin):
+    tasks: t.Dict[str, str]
+    def ser(self) -> t.Iterable[str]:
+        for line in self.tasks.values():
+            yield line
 
 SECTION_LINE_RE = re.compile("##*[ \t]")
 
