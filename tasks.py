@@ -50,9 +50,11 @@ def debug_file(filename: str) -> None:
     for line in td.ser():
         print(line)
 
+
 @dataclasses.dataclass
 class TodoFileSkeleton(dj.DataClassJsonMixin):
     update_time: datetime.datetime
+
 
 def diff(since: datetime.datetime, until: datetime.datetime) -> None:
     db_file = f"{os.path.dirname(os.path.abspath(__file__))}/tasks.jsonl"
