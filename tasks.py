@@ -28,7 +28,6 @@ def load_file(filename: str) -> None | TodoFile:
                 getpass.getuser(),
             ),
         )
-    return None
 
 
 def handle_file(filename: str, db_file: str) -> None:

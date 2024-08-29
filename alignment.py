@@ -59,8 +59,8 @@ class Token:
     def mutation_score(self, other: Token) -> float:
         if self.t != other.t:
             return 100.0
-        if isinstance(self, tuple) and isinstance(other, tuple):
-            return abs(self[1] - other[1])
+        if isinstance(self.t, tuple) and isinstance(other.t, tuple):
+            return abs(self.t[1] - other.t[1])
         return 0.0 if self.text().lower() == other.text().lower() else 1
 
     def __repr__(self) -> str:
@@ -254,7 +254,10 @@ Color = t.Literal["red"] | t.Literal["green"]
 
 class ColoredString:
     def __init__(
-        self, data: str | None = None, color: None | Color = None, strike_through=False
+        self,
+        data: str | None = None,
+        color: None | Color = None,
+        strike_through: bool = False,
     ) -> None:
         self._len = 0
         self._color: None | Color = color
@@ -422,7 +425,7 @@ def align_texts(left_text: str, right_text: str) -> Alignment:
     )
 
 
-def main():
+def main() -> None:
     import sys
 
     with open(sys.argv[1], "r", encoding="utf-8") as f:

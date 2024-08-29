@@ -119,10 +119,7 @@ class TodoFile(dj.DataClassJsonMixin):
         yield from self.header.ser()
         yield from self.header_suffix
         for line in self.lines_order:
-            if isinstance(line, str):
-                yield line
-            else:
-                yield from line.ser()
+            yield from line.ser()
 
     def add_missing_ids(self) -> bool:
         """Add missing ids into sections and tasks. Return true if this was done for any sections"""
@@ -244,7 +241,7 @@ class DiffFile(dj.DataClassJsonMixin):
 SECTION_LINE_RE = re.compile("##*[ \t]")
 
 
-def til_sectionlines(lines: mit.peekable) -> t.List[str]:
+def til_sectionlines(lines: mit.peekable[str]) -> t.List[str]:
     out: t.List[str] = []
     while (x_ := lines.peek(None)) is not None:
         x: str = x_.rstrip()
@@ -287,7 +284,7 @@ def parse_header(
     return header, prefix, suffix
 
 
-def parse_section_line(lines: mit.peekable) -> None | Section:
+def parse_section_line(lines: mit.peekable[str]) -> None | Section:
     line: str | None = next(lines, None)
     if line is None:
         return None
@@ -295,7 +292,7 @@ def parse_section_line(lines: mit.peekable) -> None | Section:
     title_line = line.lstrip("#")
     level = len(line) - len(title_line)
     title_line = title_line.strip()
-    identifier = None
+    identifier: None | str = None
     title = []
     for word in SPACE_RE.split(title_line):
         if SECTION_ID_RE.fullmatch(word) is not None:
@@ -316,7 +313,7 @@ def parse_task_line(section: Section, line: str) -> None | Task:
         return None
     state: str = match.group("state")
     rest: str = match.group("rest").strip()
-    identifier = None
+    identifier: None | str = None
     skipping = True
     words = []
     task_ids: t.List[str] = []
@@ -354,7 +351,9 @@ TAG_RE = re.compile(r"#[-a-zA-Z_0-9]*")
 SPACE_RE = re.compile(r"\s\s*")
 
 
-def parse(lines: mit.peekable, file_identifiers: FileIdentifiers) -> None | TodoFile:
+def parse(
+    lines: mit.peekable[str], file_identifiers: FileIdentifiers
+) -> None | TodoFile:
     header, header_prefix, header_suffix = parse_header(til_sectionlines(lines))
     if header is None:
         return None
@@ -366,7 +365,7 @@ def parse(lines: mit.peekable, file_identifiers: FileIdentifiers) -> None | Todo
         sections.append(section)
         lines_order.append(section)
         raw_tasks = til_sectionlines(lines)
-        last_task = None
+        last_task: None | Task = None
         for raw_task in raw_tasks:
             task = parse_task_line(section, raw_task)
             if task is None:
