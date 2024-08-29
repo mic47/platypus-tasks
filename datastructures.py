@@ -126,9 +126,7 @@ class TodoFile(dj.DataClassJsonMixin):
         updated = False
         for section in self.sections:
             if section.identifier is None:
-                self.header.section_counter = increase_counter(
-                    self.header.section_counter
-                )
+                self.header.section_counter = increase_counter(self.header.section_counter)
                 section.identifier = f"s{self.header.section_counter}"
                 updated = True
         for task in self.non_id_tasks:
@@ -161,9 +159,7 @@ class TodoFile(dj.DataClassJsonMixin):
                 o_str = "\n".join(o.ser())
                 if task_str != o_str:
                     tasks[task.identifier] = DiffTask(
-                        "\n".join(
-                            aln.pretty_alignment(aln.align_texts(o_str, task_str))
-                        ),
+                        "\n".join(aln.pretty_alignment(aln.align_texts(o_str, task_str))),
                         old_section=o.section,
                         new_section=task.section,
                     )
@@ -181,9 +177,7 @@ class TodoFile(dj.DataClassJsonMixin):
             )
         # TODO: Do something / order with the sections
 
-        result = DiffFile(
-            tasks=tasks, sections=self.sections, old_sections=other.sections
-        )
+        result = DiffFile(tasks=tasks, sections=self.sections, old_sections=other.sections)
         return result
 
 
@@ -201,9 +195,7 @@ class DiffFile(dj.DataClassJsonMixin):
     old_sections: t.List[Section]
 
     def ser(self) -> t.Iterable[str]:
-        section_order = {
-            section.identifier: index for index, section in enumerate(self.sections)
-        }
+        section_order = {section.identifier: index for index, section in enumerate(self.sections)}
         unprinted_sections = {section.identifier: section for section in self.sections}
         old_sections = {section.identifier: section for section in self.old_sections}
         for task in sorted(
@@ -230,9 +222,7 @@ class DiffFile(dj.DataClassJsonMixin):
             ):
                 old_section = old_sections.get(task.old_section)
                 old_section_str = (
-                    "\n".join(old_section.ser())
-                    if old_section is not None
-                    else task.old_section
+                    "\n".join(old_section.ser()) if old_section is not None else task.old_section
                 )
                 yield f"{Fore.yellow}Following task was moved from section '{old_section_str}'{Style.reset}"
             yield task.str_diff
@@ -259,11 +249,7 @@ def parse_header(
     suffix = []
     header = None
     while index < len(lines):
-        if (
-            header is None
-            and lines[index].strip() == HEADER_BEGIN
-            and index + 4 < len(lines)
-        ):
+        if header is None and lines[index].strip() == HEADER_BEGIN and index + 4 < len(lines):
             task_counter = lines[index + 1].strip()
             section_counter = lines[index + 2].strip()
             identifier = lines[index + 3].strip()
@@ -351,9 +337,7 @@ TAG_RE = re.compile(r"#[-a-zA-Z_0-9]*")
 SPACE_RE = re.compile(r"\s\s*")
 
 
-def parse(
-    lines: mit.peekable[str], file_identifiers: FileIdentifiers
-) -> None | TodoFile:
+def parse(lines: mit.peekable[str], file_identifiers: FileIdentifiers) -> None | TodoFile:
     header, header_prefix, header_suffix = parse_header(til_sectionlines(lines))
     if header is None:
         return None
@@ -373,10 +357,7 @@ def parse(
                 if last_task is not None:
                     last_task.description.append(stripped_line)
                     for word in SPACE_RE.split(stripped_line):
-                        if (
-                            TAG_RE.fullmatch(word) is not None
-                            and word not in last_task.tags
-                        ):
+                        if TAG_RE.fullmatch(word) is not None and word not in last_task.tags:
                             last_task.tags.append(word)
                 else:
                     section.description.append(stripped_line)

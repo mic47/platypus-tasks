@@ -15,11 +15,7 @@ class CharType(enum.IntEnum):
 
     @staticmethod
     def get(source: str, position: int) -> CharType:
-        if (
-            0 < position < len(source) - 1
-            and source[position - 1] == "["
-            and source[position + 1] == "]"
-        ):
+        if 0 < position < len(source) - 1 and source[position - 1] == "[" and source[position + 1] == "]":
             # Anything between brackets is considered word.
             return CharType.WORD
         char = source[position]
@@ -84,9 +80,7 @@ def token_parser(source: str) -> t.Iterable[Token]:
         if c_type == CharType.WHITESPACE:
             whitespace_text = token.text()
             current_indentation = (
-                len(whitespace_text.split("\n")[-1])
-                if "\n" in whitespace_text
-                else prev_indentation
+                len(whitespace_text.split("\n")[-1]) if "\n" in whitespace_text else prev_indentation
             )
             if current_indentation != prev_indentation:
                 yield Token(
@@ -113,9 +107,7 @@ AlignmentOperation = t.Tuple[T, T] | t.Tuple[T, None] | t.Tuple[None, T]
 
 
 class PathList:
-    def __init__(
-        self, payload: AlignmentOperation[Token], previous: None | PathList
-    ) -> None:
+    def __init__(self, payload: AlignmentOperation[Token], previous: None | PathList) -> None:
         self.payload = payload
         self.previous = previous
 
@@ -224,15 +216,11 @@ def align(left: t.List[Token], right: t.List[Token]) -> Alignment:
     current.append(AlignmentState(empty(), unreachable(), unreachable()))
     for l in left:
         prev = current[-1]
-        current.append(
-            AlignmentState(unreachable(), prev.insert_left_score(l), unreachable())
-        )
+        current.append(AlignmentState(unreachable(), prev.insert_left_score(l), unreachable()))
     for r in right:
         next_row = []
         prev = current[0]
-        next_row.append(
-            AlignmentState(unreachable(), unreachable(), prev.insert_right_score(r))
-        )
+        next_row.append(AlignmentState(unreachable(), unreachable(), prev.insert_right_score(r)))
         for l_index, l in enumerate(left):
             l_index += 1
             next_row.append(
@@ -379,9 +367,7 @@ def pretty_alignment(alignment: Alignment) -> t.Iterable[str]:
     yield from flush()
 
 
-def add_tokens(
-    old_alignment: Alignment, left: t.List[Token], right: t.List[Token]
-) -> Alignment:
+def add_tokens(old_alignment: Alignment, left: t.List[Token], right: t.List[Token]) -> Alignment:
     new_alignment: Alignment = []
     left_index = 0
     right_index = 0
@@ -390,17 +376,12 @@ def add_tokens(
     for a_left, a_right in reversed(old_alignment):
         right_position = a_right if a_right is not None else right_position
         if right_position is not None:
-            while (
-                right_index < len(right)
-                and right[right_index].start < right_position.start
-            ):
+            while right_index < len(right) and right[right_index].start < right_position.start:
                 new_alignment.append((None, right[right_index]))
                 right_index += 1
         left_position = a_left if left is not None else left_position
         if left_position is not None:
-            while (
-                left_index < len(left) and left[left_index].start < left_position.start
-            ):
+            while left_index < len(left) and left[left_index].start < left_position.start:
                 new_alignment.append((left[left_index], None))
                 left_index += 1
         new_alignment.append(t.cast(AlignmentOperation[Token], (a_left, a_right)))
@@ -426,6 +407,7 @@ def align_texts(left_text: str, right_text: str) -> Alignment:
 
 
 def main() -> None:
+    # pylint: disable=import-outside-toplevel
     import sys
 
     with open(sys.argv[1], "r", encoding="utf-8") as f:

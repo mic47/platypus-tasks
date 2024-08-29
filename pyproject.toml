@@ -1,0 +1,29 @@
+[tool.black]
+
+line-length = 110
+exclude = "node_modules/"
+
+
+[tool.pylint.format]
+
+max-line-length=110
+
+[tool.pylint."MESSAGES CONTROL"]
+
+disable = '''
+  missing-function-docstring,
+  missing-class-docstring,
+  missing-module-docstring,
+  fixme,
+  too-many-lines,
+  too-many-statements,
+  too-many-instance-attributes,
+  too-many-arguments,
+  too-many-locals,
+  too-many-branches,
+  too-many-nested-blocks,
+  unsubscriptable-object,
+  line-too-long,
+  too-few-public-methods,
+
+'''
