@@ -35,7 +35,7 @@ def handle_file(filename: str, db_file: str) -> None:
     if td is None:
         print("Not TODO file")
         return
-    if td.add_missing_ids():
+    if td.resolve_issues():
         with open(filename, "w", encoding="utf-8") as f:
             for line in td.ser():
                 print(line, file=f)
@@ -48,7 +48,7 @@ def debug_file(filename: str) -> None:
     if td is None:
         print("Not TODO file")
         return
-    td.add_missing_ids()
+    td.resolve_issues()
     for line in td.ser():
         print(line)
 

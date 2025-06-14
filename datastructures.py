@@ -19,6 +19,8 @@ UUID_RE = re.compile("[a-zA-Z0-9][-a-zA-Z0-9]*")
 HEADER_BEGIN = "TASK FILE HEADER BEGIN"
 HEADER_END = "TASK FILE HEADER END"
 
+EMPTY_TASK_STATE = "[ ]"
+
 
 def increase_counter(counter: str) -> str:
     """Increase string counter. Assumes that the counter is valid integer number"""
@@ -65,6 +67,19 @@ class Section(dj.DataClassJsonMixin):
 
 
 @dc.dataclass
+class TaskRef(dj.DataClassJsonMixin):
+    task: str
+    section: str
+    title: str
+    description: t.List[str]
+
+    def ser(self) -> t.Iterable[str]:
+        yield self.title
+        if self.description:
+            yield from self.description
+
+
+@dc.dataclass
 class Task(dj.DataClassJsonMixin):
     identifier: t.Optional[str]
     state: str
@@ -107,10 +122,11 @@ class TodoFile(dj.DataClassJsonMixin):
     sections: t.List[Section]
     tasks: t.Dict[str, Task]
     non_id_tasks: t.List[Task]
+    task_refs: t.List[TaskRef]
     unmatched_lines: t.List[str]
     prefix: t.List[str]
     header_suffix: t.List[str] = dc.field(default_factory=lambda: [])
-    lines_order: t.List[Section | Task] = dc.field(
+    lines_order: t.List[Section | Task | TaskRef] = dc.field(
         default_factory=lambda: [], metadata=dj.config(encoder=lambda _: [])
     )
 
@@ -120,6 +136,31 @@ class TodoFile(dj.DataClassJsonMixin):
         yield from self.header_suffix
         for line in self.lines_order:
             yield from line.ser()
+
+    def resolve_issues(self) -> bool:
+        changed = self.add_missing_ids()
+        changed |= self.resolve_task_refs()
+        return changed
+
+    def resolve_task_refs(self) -> bool:
+        updated = False
+        # TODO: need to resolve state
+        for ref in self.task_refs:
+            task = self.tasks.get(ref.task)
+            if task is None:
+                # TODO: this is error?
+                continue
+            if "".join(ref.description).strip() != "":
+                updated = True
+                if task.description:
+                    task.description.append("")
+                updatetime = dt.datetime.now().replace(microsecond=0)
+                task.description.append(f"Updated at {updatetime.isoformat()}")
+                task.description.extend(ref.description)
+            ref.description = []
+            ref.title = f"@{task.identifier} {task.title}"
+        self.task_refs = []
+        return updated
 
     def add_missing_ids(self) -> bool:
         """Add missing ids into sections and tasks. Return true if this was done for any sections"""
@@ -330,10 +371,20 @@ def parse_task_line(section: Section, line: str) -> None | Task:
     )
 
 
+def parse_ref_task_line(section: Section, line: str) -> None | TaskRef:
+    raw_task = line.rstrip()
+    match = REF_LINE_RE.match(raw_task)
+    if match is None:
+        return None
+    task = match.group("task")
+    return TaskRef(task, section.identifier or section.title, raw_task, [])
+
+
 SECTION_ID_RE = re.compile(r"s[0-9][0-9]*")
 TASK_LINE_RE = re.compile(r"^(?P<prefix>[ *-]*)(?P<state>\[[^]]*\])(?P<rest>.*)$")
 TASK_ID_RE = re.compile(r"t[0-9][0-9]*")
 TAG_RE = re.compile(r"#[-a-zA-Z_0-9]*")
+REF_LINE_RE = re.compile(r"^@(?P<task>t[0-9][0-9]*)(?P<title>\b.*)")
 SPACE_RE = re.compile(r"\s\s*")
 
 
@@ -344,30 +395,35 @@ def parse(lines: mit.peekable[str], file_identifiers: FileIdentifiers) -> None |
     tasks = {}
     non_id_tasks = []
     sections = []
-    lines_order: t.List[Section | Task] = []
+    task_refs = []
+    lines_order: t.List[Section | Task | TaskRef] = []
     while (section := parse_section_line(lines)) is not None:
         sections.append(section)
         lines_order.append(section)
         raw_tasks = til_sectionlines(lines)
-        last_task: None | Task = None
+        last_task_or_ref: None | Task | TaskRef = None
         for raw_task in raw_tasks:
-            task = parse_task_line(section, raw_task)
-            if task is None:
+            task_or_ref = parse_ref_task_line(section, raw_task) or parse_task_line(section, raw_task)
+            if task_or_ref is None:
                 stripped_line = raw_task.rstrip("\n")
-                if last_task is not None:
-                    last_task.description.append(stripped_line)
-                    for word in SPACE_RE.split(stripped_line):
-                        if TAG_RE.fullmatch(word) is not None and word not in last_task.tags:
-                            last_task.tags.append(word)
+                if last_task_or_ref is not None:
+                    last_task_or_ref.description.append(stripped_line)
+                    if isinstance(last_task_or_ref, Task):
+                        for word in SPACE_RE.split(stripped_line):
+                            if TAG_RE.fullmatch(word) is not None and word not in last_task_or_ref.tags:
+                                last_task_or_ref.tags.append(word)
                 else:
                     section.description.append(stripped_line)
                 continue
-            last_task = task
-            lines_order.append(task)
-            if task.identifier is None:
-                non_id_tasks.append(task)
+            last_task_or_ref = task_or_ref
+            lines_order.append(task_or_ref)
+            if isinstance(task_or_ref, Task):
+                if task_or_ref.identifier is None:
+                    non_id_tasks.append(task_or_ref)
+                else:
+                    tasks[task_or_ref.identifier] = task_or_ref
             else:
-                tasks[task.identifier] = task
+                task_refs.append(task_or_ref)
     now = dt.datetime.now()
     td = TodoFile(
         header,
@@ -377,6 +433,7 @@ def parse(lines: mit.peekable[str], file_identifiers: FileIdentifiers) -> None |
         sections,
         tasks,
         non_id_tasks,
+        task_refs,
         [],  # Unmatched lines
         header_prefix,
         header_suffix,
