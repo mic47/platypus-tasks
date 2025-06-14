@@ -158,7 +158,10 @@ class TodoFile(dj.DataClassJsonMixin):
                 task.description.append(f"Updated at {updatetime.isoformat()}")
                 task.description.extend(ref.description)
             ref.description = []
-            ref.title = f"@{task.identifier} {task.title}"
+            new_title = f"@{task.identifier} {task.title}"
+            if ref.title != new_title:
+                ref.title = new_title
+                updated = True
         self.task_refs = []
         return updated
 
@@ -384,7 +387,7 @@ SECTION_ID_RE = re.compile(r"s[0-9][0-9]*")
 TASK_LINE_RE = re.compile(r"^(?P<prefix>[ *-]*)(?P<state>\[[^]]*\])(?P<rest>.*)$")
 TASK_ID_RE = re.compile(r"t[0-9][0-9]*")
 TAG_RE = re.compile(r"#[-a-zA-Z_0-9]*")
-REF_LINE_RE = re.compile(r"^@(?P<task>t[0-9][0-9]*)(?P<title>\b.*)")
+REF_LINE_RE = re.compile(r"^\s*@(?P<task>t[0-9][0-9]*)(?P<title>\b.*)")
 SPACE_RE = re.compile(r"\s\s*")
 
 
