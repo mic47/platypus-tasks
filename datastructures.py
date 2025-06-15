@@ -49,7 +49,9 @@ class Header(dj.DataClassJsonMixin):
 
 
 @dc.dataclass
-class Section(dj.DataClassJsonMixin):
+class DeprecatedSection(dj.DataClassJsonMixin):
+    """Exists only for migration of old data"""
+
     identifier: str | None
     title: str
     level: int
@@ -136,13 +138,13 @@ class TodoFile(dj.DataClassJsonMixin):
     file_identifiers: FileIdentifiers
     update_time_pretty: str
     update_time: dt.datetime
-    deprecated_sections: t.List[Section] = dc.field(metadata=dj.config(field_name="sections"))
+    deprecated_sections: t.List[DeprecatedSection] = dc.field(metadata=dj.config(field_name="sections"))
     tasks: t.Dict[str, Task]
     non_id_tasks: t.List[Task]
-    task_refs: t.List[TaskRef]
     unmatched_lines: t.List[str]
     prefix: t.List[str]
     header_suffix: t.List[str] = dc.field(default_factory=lambda: [])
+    task_refs: t.List[TaskRef] = dc.field(default_factory=lambda: [])
 
     def ordered_tasks_and_refs(self) -> t.List[Task | TaskRef]:
         tasks_or_refs: t.List[Task | TaskRef] = list(it.chain(self.tasks.values(), self.task_refs))
@@ -159,13 +161,11 @@ class TodoFile(dj.DataClassJsonMixin):
         """Resolve any possible issues after parsing file from the user."""
         changed = self._add_missing_ids()
         changed |= self._resolve_task_refs()
-        changed |= self._migrate_section_ids_to_task_ids()
         changed |= self._migrate_sections_list_to_tasks()
         return changed
 
     def migrate(self) -> TodoFile:
         """Migrate from old ways of doing things. Should be called after parsing DB file."""
-        self._migrate_section_ids_to_task_ids()
         self._migrate_sections_list_to_tasks()
         return self
 
@@ -207,15 +207,6 @@ class TodoFile(dj.DataClassJsonMixin):
             self.tasks[task.identifier] = task
             updated = True
         self.non_id_tasks = []
-        return updated
-
-    def _migrate_section_ids_to_task_ids(self) -> bool:
-        updated = False
-        for section in self.deprecated_sections:
-            if section.identifier is not None and section.identifier.startswith("s"):
-                self.header.task_counter = increase_counter(self.header.task_counter)
-                section.identifier = f"t{self.header.task_counter}"
-                updated = True
         return updated
 
     def _migrate_sections_list_to_tasks(self) -> bool:
@@ -496,7 +487,7 @@ def parse_ref_task_line(section: Task, line: str, line_number: int) -> None | Ta
 ID_RE = re.compile(r"(s|t)[0-9][0-9]*")
 TASK_LINE_RE = re.compile(r"^(?P<prefix>[ *-]*)(?P<state>\[[^]]*\])(?P<rest>.*)$")
 TAG_RE = re.compile(r"#[-a-zA-Z_0-9]*")
-REF_LINE_RE = re.compile(r"^\s*@(?P<task>t[0-9][0-9]*)(?P<title>\b.*)")
+REF_LINE_RE = re.compile(r"^\s*@(?P<task>(s|t)[0-9][0-9]*)(?P<title>\b.*)")
 SPACE_RE = re.compile(r"\s\s*")
 
 
@@ -547,9 +538,9 @@ def parse(lines: mit.peekable[t.Tuple[int, str]], file_identifiers: FileIdentifi
         [],
         tasks,
         non_id_tasks,
-        task_refs,
         [],  # Unmatched lines
         [x for _, x in header_prefix],
         [x for _, x in header_suffix],
+        task_refs,
     )
     return td
