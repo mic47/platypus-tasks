@@ -7,6 +7,7 @@ import datetime as dt
 import math
 import re
 import typing as t
+import itertools as it
 
 import dataclasses_json as dj
 import more_itertools as mit
@@ -54,14 +55,28 @@ class Section(dj.DataClassJsonMixin):
     level: int
     description: t.List[str] = dc.field(default_factory=lambda: [])
 
-    def ser(self) -> t.Iterable[str]:
-        level = "#" * self.level
-        words = [level]
-        if self.identifier is not None:
-            words.append(self.identifier)
-        words.append(self.title)
-        yield " ".join(words)
-        yield from self.description
+    def migrate_to_task(self, parent_section: Task, line_number: int) -> Task:
+        task = parse_task_line(parent_section, self.title, line_number)
+        if task is None:
+            task = parse_task_line(parent_section, f"{EMPTY_TASK_STATE} {self.title}", line_number)
+            if task is not None:
+                task.state = None
+        if task is None:
+            task = Task(
+                identifier=None,
+                title=self.title,
+                level=None,
+                description=[],
+                state=None,
+                related_tasks=[],
+                tags=[],
+                section=parent_section.identifier or parent_section.title,
+                line_number=line_number,
+            )
+        task.identifier = self.identifier
+        task.level = self.level
+        task.description = self.description
+        return task
 
 
 @dc.dataclass
@@ -70,6 +85,7 @@ class TaskRef(dj.DataClassJsonMixin):
     section: str
     title: str
     description: t.List[str]
+    line_number: int
 
     def ser(self) -> t.Iterable[str]:
         yield self.title
@@ -80,13 +96,15 @@ class TaskRef(dj.DataClassJsonMixin):
 @dc.dataclass
 class Task(dj.DataClassJsonMixin):
     identifier: t.Optional[str]
-    state: str
+    state: t.Optional[str]
     related_tasks: t.List[str]
     tags: t.List[str]
     title: str = dc.field(metadata=dj.config(field_name="content"))
     section: str
+    line_number: int = dc.field(default=-1)
     prefix: str = dc.field(default="")  # Originally was missing
     description: t.List[str] = dc.field(default_factory=lambda: [])
+    level: t.Optional[int] = dc.field(default=None)
 
     def ser(self) -> t.Iterable[str]:
         used_words_in_title = set(SPACE_RE.split(self.title))
@@ -95,12 +113,13 @@ class Task(dj.DataClassJsonMixin):
             if tag in used_words_in_title:
                 break
             prefix_tags.append(tag)
-        words = [self.state]
+        words = [self.state] if self.state is not None else []
         if self.identifier is not None:
             words.append(self.identifier)
         words.extend(prefix_tags)
         words.append(self.title)
-        yield self.prefix + " ".join(words)
+        level = ("#" * self.level + " ") if self.level is not None and self.level > 0 else ""
+        yield level + self.prefix + " ".join(words)
         yield from self.description
 
 
@@ -117,37 +136,47 @@ class TodoFile(dj.DataClassJsonMixin):
     file_identifiers: FileIdentifiers
     update_time_pretty: str
     update_time: dt.datetime
-    sections: t.List[Section]
+    deprecated_sections: t.List[Section] = dc.field(metadata=dj.config(field_name="sections"))
     tasks: t.Dict[str, Task]
     non_id_tasks: t.List[Task]
     task_refs: t.List[TaskRef]
     unmatched_lines: t.List[str]
     prefix: t.List[str]
     header_suffix: t.List[str] = dc.field(default_factory=lambda: [])
-    lines_order: t.List[Section | Task | TaskRef] = dc.field(
-        default_factory=lambda: [], metadata=dj.config(encoder=lambda _: [])
-    )
+
+    def ordered_tasks_and_refs(self) -> t.List[Task | TaskRef]:
+        tasks_or_refs: t.List[Task | TaskRef] = list(it.chain(self.tasks.values(), self.task_refs))
+        return sorted(tasks_or_refs, key=lambda x: x.line_number)
 
     def ser(self) -> t.Iterable[str]:
         yield from self.prefix
         yield from self.header.ser()
         yield from self.header_suffix
-        for line in self.lines_order:
+        for line in self.ordered_tasks_and_refs():
             yield from line.ser()
 
     def resolve_issues(self) -> bool:
-        changed = self.add_missing_ids()
-        changed |= self.resolve_task_refs()
-        changed |= self.convert_section_ids_to_task_ids()
+        """Resolve any possible issues after parsing file from the user."""
+        changed = self._add_missing_ids()
+        changed |= self._resolve_task_refs()
+        changed |= self._migrate_section_ids_to_task_ids()
+        changed |= self._migrate_sections_list_to_tasks()
         return changed
 
-    def resolve_task_refs(self) -> bool:
+    def migrate(self) -> TodoFile:
+        """Migrate from old ways of doing things. Should be called after parsing DB file."""
+        self._migrate_section_ids_to_task_ids()
+        self._migrate_sections_list_to_tasks()
+        return self
+
+    def _resolve_task_refs(self) -> bool:
         updated = False
-        # TODO: need to resolve state
         for ref in self.task_refs:
             task = self.tasks.get(ref.task)
             if task is None:
-                # TODO: this is error?
+                if not ref.title.startswith("!<ERR>"):
+                    ref.title = ref.title + " !<ERR>"
+                    updated = True
                 continue
             if "".join(ref.description).strip() != "":
                 updated = True
@@ -161,13 +190,12 @@ class TodoFile(dj.DataClassJsonMixin):
             if ref.title != new_title:
                 ref.title = new_title
                 updated = True
-        self.task_refs = []
         return updated
 
-    def add_missing_ids(self) -> bool:
+    def _add_missing_ids(self) -> bool:
         """Add missing ids into sections and tasks. Return true if this was done for any sections"""
         updated = False
-        for section in self.sections:
+        for section in self.deprecated_sections:
             if section.identifier is None:
                 self.header.task_counter = increase_counter(self.header.task_counter)
                 section.identifier = f"t{self.header.task_counter}"
@@ -181,13 +209,47 @@ class TodoFile(dj.DataClassJsonMixin):
         self.non_id_tasks = []
         return updated
 
-    def convert_section_ids_to_task_ids(self) -> bool:
+    def _migrate_section_ids_to_task_ids(self) -> bool:
         updated = False
-        for section in self.sections:
+        for section in self.deprecated_sections:
             if section.identifier is not None and section.identifier.startswith("s"):
                 self.header.task_counter = increase_counter(self.header.task_counter)
                 section.identifier = f"t{self.header.task_counter}"
                 updated = True
+        return updated
+
+    def _migrate_sections_list_to_tasks(self) -> bool:
+        updated = False
+        section_stack = SectionStack()
+        # When migrating, we need to assign numbers to sections
+        virtual_line_counter = 1
+        tasks_to_sections: t.Dict[str | None, t.List[Task]] = {}
+        for task in self.tasks.values():
+            tasks_to_sections.setdefault(task.section, []).append(task)
+        for old_section in self.deprecated_sections:
+            previous_section = section_stack.get_parent(old_section.level)
+            section = old_section.migrate_to_task(previous_section, virtual_line_counter)
+            virtual_line_counter += 1
+            section_stack.push_section(section)
+            for t in it.chain(
+                tasks_to_sections.get(section.identifier, []), tasks_to_sections.get(section.title, [])
+            ):
+                if t.line_number < 0:
+                    t.line_number = virtual_line_counter
+                    virtual_line_counter += 1
+                    updated = True
+            if section.identifier in self.tasks:
+                raise Exception(f"Section {section.identifier} already exists in tasks")
+            if section.identifier is None:
+                raise Exception(f"There is section no identifier")
+            self.tasks[section.identifier] = section
+            updated = True
+        for t in self.tasks.values():
+            if t.line_number < 0:
+                t.line_number = virtual_line_counter
+                virtual_line_counter += 1
+                updated = True
+        self.deprecated_sections = []
         return updated
 
     def diff(self, other: TodoFile) -> DiffFile:
@@ -204,6 +266,7 @@ class TodoFile(dj.DataClassJsonMixin):
             if o is None:
                 tasks[task.identifier] = DiffTask(
                     "\n".join(aln.pretty_alignment(aln.align_texts("", task_str))),
+                    task.line_number,
                     old_section=None,
                     new_section=task.section,
                 )
@@ -212,6 +275,7 @@ class TodoFile(dj.DataClassJsonMixin):
                 if task_str != o_str:
                     tasks[task.identifier] = DiffTask(
                         "\n".join(aln.pretty_alignment(aln.align_texts(o_str, task_str))),
+                        task.line_number,
                         old_section=o.section,
                         new_section=task.section,
                     )
@@ -224,47 +288,45 @@ class TodoFile(dj.DataClassJsonMixin):
             task_str = "\n".join(task.ser())
             tasks[task.identifier] = DiffTask(
                 "\n".join(aln.pretty_alignment(aln.align_texts(task_str, ""))),
+                task.line_number,
                 old_section=task.section,
                 new_section=None,
             )
         # TODO: Do something / order with the sections
 
-        result = DiffFile(tasks=tasks, sections=self.sections, old_sections=other.sections)
+        result = DiffFile(diff_tasks=tasks, sections=self.tasks, old_sections=other.tasks)
         return result
 
 
 @dc.dataclass
 class DiffTask:
     str_diff: str
+    line_number: int
     old_section: str | None
     new_section: str | None
 
 
 @dc.dataclass
 class DiffFile(dj.DataClassJsonMixin):
-    tasks: t.Dict[str, DiffTask]
-    sections: t.List[Section]
-    old_sections: t.List[Section]
+    diff_tasks: t.Dict[str, DiffTask]
+    sections: t.Dict[str, Task]
+    old_sections: t.Dict[str, Task]
 
     def ser(self) -> t.Iterable[str]:
-        section_order = {section.identifier: index for index, section in enumerate(self.sections)}
-        unprinted_sections = {section.identifier: section for section in self.sections}
-        old_sections = {section.identifier: section for section in self.old_sections}
+        section_order = {key: section.line_number for key, section in self.sections.items()}
+        unprinted_sections = {k: v for k, v in self.sections.items() if k not in self.diff_tasks}
         for task in sorted(
-            self.tasks.values(),
-            key=lambda x: section_order.get(x.new_section or x.old_section) or -1,
+            self.diff_tasks.values(),
+            key=lambda x: x.line_number,
         ):
-            section = unprinted_sections.get(task.new_section or task.old_section)
-            level = math.inf
-            sections: t.List[Section] = []
-            while section is not None and section.level < level:
+            section = unprinted_sections.get(task.new_section or task.old_section or "")
+            level = 1 << 47
+            sections: t.List[Task] = []
+            while section is not None:
                 sections.append(section)
-                del unprinted_sections[section.identifier]
-                level = section.level
-                index = section_order.get(section.identifier)
-                if index is None or index <= 0:
-                    break
-                section = self.sections[index - 1]
+                if section.identifier is not None and section.identifier in unprinted_sections:
+                    del unprinted_sections[section.identifier]
+                section = unprinted_sections.get(section.section)
             for section in reversed(sections):
                 yield from (f"{Style.bold}{x}{Style.reset}" for x in section.ser())
             if (
@@ -272,7 +334,7 @@ class DiffFile(dj.DataClassJsonMixin):
                 and task.old_section is not None
                 and task.new_section != task.old_section
             ):
-                old_section = old_sections.get(task.old_section)
+                old_section = self.old_sections.get(task.old_section)
                 old_section_str = (
                     "\n".join(old_section.ser()) if old_section is not None else task.old_section
                 )
@@ -283,10 +345,11 @@ class DiffFile(dj.DataClassJsonMixin):
 SECTION_LINE_RE = re.compile("##*[ \t]")
 
 
-def til_sectionlines(lines: mit.peekable[str]) -> t.List[str]:
-    out: t.List[str] = []
+def til_sectionlines(lines: mit.peekable[t.Tuple[int, str]]) -> t.List[t.Tuple[int, str]]:
+    out: t.List[t.Tuple[int, str]] = []
     while (x_ := lines.peek(None)) is not None:
-        x: str = x_.rstrip()
+        n, l = x_
+        x: str = l.rstrip()
         if SECTION_LINE_RE.match(x) is not None:
             return out
         out.append(next(lines))
@@ -294,8 +357,8 @@ def til_sectionlines(lines: mit.peekable[str]) -> t.List[str]:
 
 
 def parse_header(
-    lines: t.List[str],
-) -> t.Tuple[Header | None, t.List[str], t.List[str]]:
+    lines: t.List[t.Tuple[int, str]],
+) -> t.Tuple[Header | None, t.List[t.Tuple[int, str]], t.List[t.Tuple[int, str]]]:
     index = 0
     prefix = []
     suffix = []
@@ -303,14 +366,14 @@ def parse_header(
     while index < len(lines):
         if header is None:
             if (
-                lines[index].strip() == HEADER_BEGIN
+                lines[index][1].strip() == HEADER_BEGIN
                 and index + 4 < len(lines)
-                and lines[index + 4].strip() == HEADER_END
+                and lines[index + 4][1].strip() == HEADER_END
             ):
                 # OLD format, with section counter, we just validate it
-                task_counter = lines[index + 1].strip()
-                section_counter = lines[index + 2].strip()
-                identifier = lines[index + 3].strip()
+                task_counter = lines[index + 1][1].strip()
+                section_counter = lines[index + 2][1].strip()
+                identifier = lines[index + 3][1].strip()
                 if (
                     COUNTER_RE.fullmatch(task_counter) is not None
                     and COUNTER_RE.fullmatch(section_counter) is not None
@@ -320,13 +383,13 @@ def parse_header(
                     index += 5
                     continue
             if (
-                lines[index].strip() == HEADER_BEGIN
+                lines[index][1].strip() == HEADER_BEGIN
                 and index + 3 < len(lines)
-                and lines[index + 3].strip() == HEADER_END
+                and lines[index + 3][1].strip() == HEADER_END
             ):
                 # New format, without section counter
-                task_counter = lines[index + 1].strip()
-                identifier = lines[index + 2].strip()
+                task_counter = lines[index + 1][1].strip()
+                identifier = lines[index + 2][1].strip()
                 if (
                     COUNTER_RE.fullmatch(task_counter) is not None
                     and UUID_RE.fullmatch(identifier) is not None
@@ -343,29 +406,45 @@ def parse_header(
     return header, prefix, suffix
 
 
-def parse_section_line(lines: mit.peekable[str]) -> None | Section:
-    line: str | None = next(lines, None)
-    if line is None:
+class SectionStack:
+    def __init__(self) -> None:
+        self.stack = [Task(None, "", [], [], "@root", "", -1, "", [], level=0)]
+
+    def get_parent(self, level: int) -> Task:
+        while (self.stack[-1].level or 0) >= level:
+            self.stack.pop()
+        return self.stack[-1]
+
+    def push_section(self, section: Task) -> None:
+        if section.level is None:
+            raise Exception("Pushing section without level!")
+        self.get_parent(section.level)
+        self.stack.append(section)
+
+
+def parse_section_line(section_stack: SectionStack, lines: mit.peekable[t.Tuple[int, str]]) -> None | Task:
+    line_with_index: t.Tuple[int, str] | None = next(lines, None)
+    if line_with_index is None:
         return None
+    line_number, line = line_with_index
     line = line.strip()
     title_line = line.lstrip("#")
     level = len(line) - len(title_line)
     title_line = title_line.strip()
-    identifier: None | str = None
-    title = []
-    for word in SPACE_RE.split(title_line):
-        if ID_RE.fullmatch(word) is not None:
-            if identifier is None:
-                identifier = word
-            else:
-                title.append(word)
-        else:
-            title.append(word)
+    parent_section = section_stack.get_parent(level)
+    task = parse_task_line(parent_section, title_line, line_number)
+    if task is None:
+        task = parse_task_line(parent_section, f"{EMPTY_TASK_STATE} {title_line}", line_number)
+        if task is None:
+            raise Exception(f"Unable to parse section line {title_line}")
+            # return None
+        task.state = None
+    task.level = level
+    section_stack.push_section(task)
+    return task
 
-    return Section(identifier, " ".join(title), level)
 
-
-def parse_task_line(section: Section, line: str) -> None | Task:
+def parse_task_line(section: Task, line: str, line_number: int) -> None | Task:
     raw_task = line.rstrip()
     match = TASK_LINE_RE.match(raw_task)
     if match is None:
@@ -400,16 +479,17 @@ def parse_task_line(section: Section, line: str) -> None | Task:
         " ".join(words),
         section.identifier or section.title,
         prefix=match.group("prefix"),
+        line_number=line_number,
     )
 
 
-def parse_ref_task_line(section: Section, line: str) -> None | TaskRef:
+def parse_ref_task_line(section: Task, line: str, line_number: int) -> None | TaskRef:
     raw_task = line.rstrip()
     match = REF_LINE_RE.match(raw_task)
     if match is None:
         return None
     task = match.group("task")
-    return TaskRef(task, section.identifier or section.title, raw_task, [])
+    return TaskRef(task, section.identifier or section.title, raw_task, [], line_number)
 
 
 # Note: s is used only for historic purposes, where tasks and sections used different counter
@@ -420,24 +500,27 @@ REF_LINE_RE = re.compile(r"^\s*@(?P<task>t[0-9][0-9]*)(?P<title>\b.*)")
 SPACE_RE = re.compile(r"\s\s*")
 
 
-def parse(lines: mit.peekable[str], file_identifiers: FileIdentifiers) -> None | TodoFile:
+def parse(lines: mit.peekable[t.Tuple[int, str]], file_identifiers: FileIdentifiers) -> None | TodoFile:
     header, header_prefix, header_suffix = parse_header(til_sectionlines(lines))
     if header is None:
         return None
     tasks = {}
     non_id_tasks = []
-    sections = []
     task_refs = []
-    lines_order: t.List[Section | Task | TaskRef] = []
-    while (section := parse_section_line(lines)) is not None:
-        sections.append(section)
-        lines_order.append(section)
+    section_stack = SectionStack()
+    while (section := parse_section_line(section_stack, lines)) is not None:
+        if section.identifier is None:
+            non_id_tasks.append(section)
+        else:
+            tasks[section.identifier] = section
         raw_tasks = til_sectionlines(lines)
         last_task_or_ref: None | Task | TaskRef = None
         for raw_task in raw_tasks:
-            task_or_ref = parse_ref_task_line(section, raw_task) or parse_task_line(section, raw_task)
+            task_or_ref = parse_ref_task_line(section, raw_task[1], raw_task[0]) or parse_task_line(
+                section, raw_task[1], raw_task[0]
+            )
             if task_or_ref is None:
-                stripped_line = raw_task.rstrip("\n")
+                stripped_line = raw_task[1].rstrip("\n")
                 if last_task_or_ref is not None:
                     last_task_or_ref.description.append(stripped_line)
                     if isinstance(last_task_or_ref, Task):
@@ -448,7 +531,6 @@ def parse(lines: mit.peekable[str], file_identifiers: FileIdentifiers) -> None |
                     section.description.append(stripped_line)
                 continue
             last_task_or_ref = task_or_ref
-            lines_order.append(task_or_ref)
             if isinstance(task_or_ref, Task):
                 if task_or_ref.identifier is None:
                     non_id_tasks.append(task_or_ref)
@@ -462,13 +544,12 @@ def parse(lines: mit.peekable[str], file_identifiers: FileIdentifiers) -> None |
         file_identifiers,
         now.isoformat(),
         now,
-        sections,
+        [],
         tasks,
         non_id_tasks,
         task_refs,
         [],  # Unmatched lines
-        header_prefix,
-        header_suffix,
-        lines_order,
+        [x for _, x in header_prefix],
+        [x for _, x in header_suffix],
     )
     return td

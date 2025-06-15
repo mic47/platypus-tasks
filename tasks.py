@@ -21,7 +21,7 @@ from datastructures import FileIdentifiers, parse, TodoFile, Task, DiffTask, Dif
 def load_file(filename: str) -> None | TodoFile:
     with open(filename, "r", encoding="utf-8") as f:
         return parse(
-            mit.peekable(f),
+            mit.peekable(enumerate(f)),
             FileIdentifiers(
                 os.path.abspath(filename),
                 platform.node(),
@@ -76,8 +76,8 @@ def diff(since: datetime.datetime, until: datetime.datetime, db_file: str) -> No
     if state_at_beginning_of_period is None or state_at_end_of_period is None:
         print("Unable to find any files matching your description")
         return
-    start = TodoFile.from_json(state_at_beginning_of_period[1])
-    end = TodoFile.from_json(state_at_end_of_period[1])
+    start = TodoFile.from_json(state_at_beginning_of_period[1]).migrate()
+    end = TodoFile.from_json(state_at_end_of_period[1]).migrate()
     for line in end.diff(start).ser():
         print(line)
 
@@ -107,16 +107,17 @@ def history(task_id: str, db_file: str) -> None:
     for todo, task, line in hist:
         text = "\n".join(task.ser())
         if text != prev_text or task.section != (prev_task.section if prev_task is not None else None):
-            todo_file = TodoFile.from_json(line)
+            todo_file = TodoFile.from_json(line).migrate()
             diff_task = DiffTask(
                 "\n".join(aln.pretty_alignment(aln.align_texts(prev_text or "", text))),
+                task.line_number,
                 old_section=prev_task.section if prev_task is not None else None,
                 new_section=task.section,
             )
             diff_file = DiffFile(
-                tasks={task.identifier: diff_task},
-                sections=todo_file.sections,
-                old_sections=prev_todo.sections if prev_todo is not None else [],
+                diff_tasks={task.identifier: diff_task},
+                sections=todo_file.tasks,
+                old_sections=prev_todo.tasks if prev_todo is not None else {},
             )
             print(f"{Fore.light_blue}{Style.bold}Updated at {todo.update_time}{Style.reset}")
             print("\n".join(diff_file.ser()))
