@@ -140,6 +140,7 @@ class TodoFile(dj.DataClassJsonMixin):
     def resolve_issues(self) -> bool:
         changed = self.add_missing_ids()
         changed |= self.resolve_task_refs()
+        changed |= self.convert_section_ids_to_task_ids()
         return changed
 
     def resolve_task_refs(self) -> bool:
@@ -170,8 +171,8 @@ class TodoFile(dj.DataClassJsonMixin):
         updated = False
         for section in self.sections:
             if section.identifier is None:
-                self.header.section_counter = increase_counter(self.header.section_counter)
-                section.identifier = f"s{self.header.section_counter}"
+                self.header.task_counter = increase_counter(self.header.task_counter)
+                section.identifier = f"t{self.header.task_counter}"
                 updated = True
         for task in self.non_id_tasks:
             self.header.task_counter = increase_counter(self.header.task_counter)
@@ -180,6 +181,15 @@ class TodoFile(dj.DataClassJsonMixin):
             self.tasks[task.identifier] = task
             updated = True
         self.non_id_tasks = []
+        return updated
+
+    def convert_section_ids_to_task_ids(self) -> bool:
+        updated = False
+        for section in self.sections:
+            if section.identifier is not None and section.identifier.startswith("s"):
+                self.header.task_counter = increase_counter(self.header.task_counter)
+                section.identifier = f"t{self.header.task_counter}"
+                updated = True
         return updated
 
     def diff(self, other: TodoFile) -> DiffFile:
@@ -325,7 +335,7 @@ def parse_section_line(lines: mit.peekable[str]) -> None | Section:
     identifier: None | str = None
     title = []
     for word in SPACE_RE.split(title_line):
-        if SECTION_ID_RE.fullmatch(word) is not None:
+        if ID_RE.fullmatch(word) is not None:
             if identifier is None:
                 identifier = word
             else:
@@ -349,7 +359,7 @@ def parse_task_line(section: Section, line: str) -> None | Task:
     task_ids: t.List[str] = []
     tags = []
     for word in SPACE_RE.split(rest):
-        if TASK_ID_RE.fullmatch(word) is not None:
+        if ID_RE.fullmatch(word) is not None:
             if identifier is None:
                 identifier = word
             else:
@@ -383,9 +393,8 @@ def parse_ref_task_line(section: Section, line: str) -> None | TaskRef:
     return TaskRef(task, section.identifier or section.title, raw_task, [])
 
 
-SECTION_ID_RE = re.compile(r"s[0-9][0-9]*")
+ID_RE = re.compile(r"(s|t)[0-9][0-9]*")
 TASK_LINE_RE = re.compile(r"^(?P<prefix>[ *-]*)(?P<state>\[[^]]*\])(?P<rest>.*)$")
-TASK_ID_RE = re.compile(r"t[0-9][0-9]*")
 TAG_RE = re.compile(r"#[-a-zA-Z_0-9]*")
 REF_LINE_RE = re.compile(r"^\s*@(?P<task>t[0-9][0-9]*)(?P<title>\b.*)")
 SPACE_RE = re.compile(r"\s\s*")
