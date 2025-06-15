@@ -36,14 +36,12 @@ def increase_counter(counter: str) -> str:
 @dc.dataclass
 class Header(dj.DataClassJsonMixin):
     task_counter: str
-    section_counter: str
     identifier: str
 
     def ser(self) -> t.List[str]:
         return [
             HEADER_BEGIN,
             self.task_counter,
-            self.section_counter,
             self.identifier,
             HEADER_END,
         ]
@@ -303,19 +301,40 @@ def parse_header(
     suffix = []
     header = None
     while index < len(lines):
-        if header is None and lines[index].strip() == HEADER_BEGIN and index + 4 < len(lines):
-            task_counter = lines[index + 1].strip()
-            section_counter = lines[index + 2].strip()
-            identifier = lines[index + 3].strip()
+        if header is None:
             if (
-                lines[index + 4].strip() == HEADER_END
-                and COUNTER_RE.fullmatch(task_counter) is not None
-                and COUNTER_RE.fullmatch(section_counter) is not None
-                and UUID_RE.fullmatch(identifier) is not None
+                lines[index].strip() == HEADER_BEGIN
+                and index + 4 < len(lines)
+                and lines[index + 4].strip() == HEADER_END
             ):
-                header = Header(task_counter, section_counter, identifier)
-                index += 5
-                continue
+                # OLD format, with section counter, we just validate it
+                task_counter = lines[index + 1].strip()
+                section_counter = lines[index + 2].strip()
+                identifier = lines[index + 3].strip()
+                if (
+                    COUNTER_RE.fullmatch(task_counter) is not None
+                    and COUNTER_RE.fullmatch(section_counter) is not None
+                    and UUID_RE.fullmatch(identifier) is not None
+                ):
+                    header = Header(task_counter, identifier)
+                    index += 5
+                    continue
+            if (
+                lines[index].strip() == HEADER_BEGIN
+                and index + 3 < len(lines)
+                and lines[index + 3].strip() == HEADER_END
+            ):
+                # New format, without section counter
+                task_counter = lines[index + 1].strip()
+                identifier = lines[index + 2].strip()
+                if (
+                    COUNTER_RE.fullmatch(task_counter) is not None
+                    and UUID_RE.fullmatch(identifier) is not None
+                ):
+                    header = Header(task_counter, identifier)
+                    index += 4
+                    continue
+
         if header is None:
             prefix.append(lines[index])
         else:
@@ -393,6 +412,7 @@ def parse_ref_task_line(section: Section, line: str) -> None | TaskRef:
     return TaskRef(task, section.identifier or section.title, raw_task, [])
 
 
+# Note: s is used only for historic purposes, where tasks and sections used different counter
 ID_RE = re.compile(r"(s|t)[0-9][0-9]*")
 TASK_LINE_RE = re.compile(r"^(?P<prefix>[ *-]*)(?P<state>\[[^]]*\])(?P<rest>.*)$")
 TAG_RE = re.compile(r"#[-a-zA-Z_0-9]*")
